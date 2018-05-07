@@ -21,7 +21,12 @@ open class DataCache<T:CachedDataOwner> {
     
     typealias ProcessedData = T.ProcessedData
     private var dataCache: CappedCache<T>
-    fileprivate var parentWrapperDict: [Int: DataWrapper<T>] = [:]
+    fileprivate var parentWrapperDict: [T: DataWrapper<T>] = [:]
+    
+    public var maxSize: Int {
+        set { dataCache.updateMaxSize(maxSize: maxSize) }
+        get { return dataCache.maxSize }
+    }
     
     init(maxSize: Int) {
         self.dataCache = CappedCache<T>(maxSize: maxSize)
@@ -33,11 +38,11 @@ open class DataCache<T:CachedDataOwner> {
     func fetchData(forParent parent: T, _ completion: @escaping (ProcessedData?, CacheFetchResult) -> Void) {
         let wrapper: DataWrapper<T>
         
-        if let dataWrapper = parentWrapperDict[parent.hashValue] {
+        if let dataWrapper = parentWrapperDict[parent] {
             wrapper = dataWrapper
         } else {
             let dataWrapper = DataWrapper<T>(parent, self)
-            parentWrapperDict[parent.hashValue] = dataWrapper
+            parentWrapperDict[parent] = dataWrapper
             wrapper = dataWrapper
         }
         
@@ -72,6 +77,9 @@ open class DataCache<T:CachedDataOwner> {
                 defer {
                     wrapper.fetchingCondition.broadcast()
                     wrapper.fetchingCondition.unlock()
+                    if completionObject == nil {
+                        self.dataCache.invalidate(wrapper)
+                    }
                     completion(completionObject, result)
                 }
                 
@@ -90,9 +98,18 @@ open class DataCache<T:CachedDataOwner> {
                     }
                     wrapper.isFetching = false
                 }
-                
-                
                 }.resume()
+        }
+    }
+    
+    
+    ///Removes the value from the cache for the parent
+    /// - returns: the value stored, or nil if none found
+    func removeValue(forParent parent: T) -> ProcessedData? {
+        if let wrapper = parentWrapperDict[parent] {
+            return dataCache.invalidate(wrapper)
+        } else {
+            return nil
         }
     }
 }
@@ -105,8 +122,8 @@ fileprivate class CappedCache <T: CachedDataOwner> {
     typealias ProcessedData = T.ProcessedData
     
     private var cache: [Wrapper : ProcessedData] = [:]
-    private var maxSize: Int
     private var queue = Queue<Wrapper>()
+    fileprivate var maxSize: Int
     
     init(maxSize: Int = 25) {
         self.maxSize = maxSize
@@ -114,12 +131,12 @@ fileprivate class CappedCache <T: CachedDataOwner> {
     
     ///Sets the element for the value and trims the cache if necessary
     func set(_ key: Wrapper,_ value: ProcessedData) {
-        if queue.getSize() == maxSize {
+        if queue.count() == maxSize {
             let expiredKey = queue.getFront()!
             expiredKey.invalidate()
             cache.removeValue(forKey: expiredKey)
         }
-        queue.insert(key)
+        queue.enqueue(key)
         cache[key] = value
     }
     
@@ -132,11 +149,17 @@ fileprivate class CappedCache <T: CachedDataOwner> {
     ///Updates the max size and trims the cache if necessary
     func updateMaxSize(maxSize: Int) {
         self.maxSize = maxSize
-        while queue.getSize() > maxSize {
+        while queue.count() > maxSize {
             let expiredKey = queue.getFront()!
             expiredKey.invalidate()
             cache.removeValue(forKey: expiredKey)
         }
+    }
+    
+    func invalidate(_ key: Wrapper) -> ProcessedData? {
+        queue.remove(element: key)
+        key.invalidate()
+        return cache.removeValue(forKey: key)
     }
 }
 
@@ -158,18 +181,19 @@ fileprivate class DataWrapper<T: CachedDataOwner>: Hashable {
     }
     
     func invalidate() {
-        dataCache?.parentWrapperDict.removeValue(forKey: dataParent.hashValue)
+        dataCache?.parentWrapperDict.removeValue(forKey: dataParent)
     }
 }
 
 ///Your generic FIFO linked list based queue
-fileprivate class Queue<T>
+fileprivate class Queue<T: Equatable>
 {
     ///Node for the linked list implementation of our queue
     private class Node<T> {
-        var value: T
+        let value: T
         var previous: Node<T>?
-        init(value: T) { self.value = value }
+        weak var next: Node<T>?
+        init(value: T) { self.value = value}
     }
     
     ///Front of our queue
@@ -184,38 +208,77 @@ fileprivate class Queue<T>
     }
     
     ///Inserts the element: T into the queue
-    public func insert(_ element: T) {
-        
+    public func enqueue(_ element: T) {
         if front == nil {
             front = Node<T>(value: element)
             back = front
         } else {
             back?.previous = Node<T>(value: element)
+            back?.previous?.next = back
             back = back?.previous
         }
-        
         size += 1
     }
     
     ///Pops the next element from the queue
     ///- returns: nil if empty, else front of the queue
     func getFront() -> T? {
+        if size == 0 {return nil}
         let element = front
         
         if size == 1 {
             back = nil
             front = nil
         }
-        else { front = front?.previous }
+        else {
+            front = front?.previous
+            front?.next = nil
+        }
         
-        if size > 0 { size -= 1 }
+        size -= 1
         
         return element?.value
     }
     
     ///Gets the size of the queue.
     /// - returns: Size of the queue
-    public func getSize() -> Int {
+    func count() -> Int {
         return size
+    }
+    
+    func print() {
+        var temp = front
+        Swift.print("Front: ", separator: "", terminator: "")
+        while temp != nil {
+            Swift.print(String(describing: temp!.value) + " <-> ", separator: "", terminator: "")
+            temp = temp?.previous
+        }
+        Swift.print(" :Back")
+    }
+    
+    func remove(element: T) {
+        var temp = front
+        while temp != nil {
+            if temp!.value == element {
+                if size == 1 {
+                    back = nil
+                    front = nil
+                } else {
+                    temp?.next?.previous = temp?.previous
+                    temp?.previous?.next = temp?.next
+                    
+                    if temp?.value == back?.value {
+                        back = temp?.next
+                    }
+                    if temp?.value == front?.value {
+                        front = temp?.previous
+                    }
+                }
+                size -= 1
+                return
+            } else {
+                temp = temp?.previous
+            }
+        }
     }
 }

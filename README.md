@@ -1,10 +1,12 @@
 # SwiftyNetworkedDataCache
-Easily cache and fetch data in one request! Cache will maintain the max size you set according to FIFO order, and trim the oldest items in the cache after the maximum size is reached. Additionally, it prevents two threads from attempting to retreive the same image at the same time. After all, who needs to fetch the same data twice?
+Easily cache and fetch data in one request! Cache will maintain the max size you set according to FIFO order, and trim the oldest items in the cache after the maximum size is reached. Additionally, it prevents the same data from being double fetched (i.e. main thread asks for the same resource 2x before download finished, data is only fetched once. This operates like a waiter queue, calling completion with the result after waiter is finished). After all, who needs to fetch the same data twice? (This is dependent on data remaining in the cache. It is up to you to decided how large to make the cache. If you never want the cache to trim, set to Int.max)
 
 ### Why is this useful?
 I created this to be able to keep a cache of profile images. It minimizes the effort required to maintain a capped size cache of data, perfect for fetching many profile photos without having to worry about refetching the same data, or caching too many objects at once.
 
 But of course, you can use other data types too! It works for any datatype you have in mind :)
+
+Additionally, this cache is not safe for concurrent mutations (you must lock the object before fetching on two or more threads).
 
 ### How does it work?
 Simply implement the CachedDataParent protocol to provide where to find the data, and use the fetchData method on an instance of DataCache, and it does the rest of the work for you. You get back a enum response telling you if and how the data was retrieved (from the network, cache, or if the network request outright failed). The data from the network request is delivered to you via a static func so that you can even decode a json object and store it in the cache. Pretty simple, huh?
